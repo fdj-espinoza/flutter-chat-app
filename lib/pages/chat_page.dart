@@ -1,8 +1,13 @@
 import 'dart:io';
 
+import 'package:chat/models/mensajes_response.dart';
+import 'package:chat/services/auth_service.dart';
+import 'package:chat/services/chat_service.dart';
+import 'package:chat/services/socket_service.dart';
 import 'package:chat/widgets/chat_message.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 class ChatPage extends StatefulWidget {
   @override
@@ -12,11 +17,60 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   final _textController = TextEditingController();
   final _focusNode = FocusNode();
+
+  late AuthService authService;
+  late ChatService chatService;
+  late SocketService socketService;
   List<ChatMessage> _messages = [];
   bool _isTyping = false;
 
   @override
+  void initState() {
+    super.initState();
+    authService = Provider.of<AuthService>(context, listen: false);
+    chatService = Provider.of<ChatService>(context, listen: false);
+    socketService = Provider.of<SocketService>(context, listen: false);
+
+    socketService.socket.on('mensaje-personal', _escucharMensaje);
+
+    _cargarHistorial(chatService.usuarioPara.uid);
+  }
+
+  void _cargarHistorial(String usuarioID) async {
+    List<Mensaje> chat = await chatService.getChat(usuarioID);
+    final history = chat.map(
+      (m) => ChatMessage(
+        text: m.mensaje,
+        uid: m.de,
+        animationController: AnimationController(
+          vsync: this,
+          duration: Duration(milliseconds: 0),
+        )..forward(),
+      ),
+    );
+    setState(() {
+      _messages.insertAll(0, history);
+    });
+  }
+
+  void _escucharMensaje(dynamic payload) {
+    ChatMessage message = ChatMessage(
+      text: payload['mensaje'],
+      uid: payload['de'],
+      animationController: AnimationController(
+        vsync: this,
+        duration: Duration(milliseconds: 300),
+      ),
+    );
+    setState(() {
+      _messages.insert(0, message);
+    });
+    message.animationController.forward();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final usuarioPara = chatService.usuarioPara;
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.white,
@@ -25,11 +79,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             CircleAvatar(
               backgroundColor: Colors.blue[100],
               maxRadius: 14,
-              child: Text('Te', style: TextStyle(fontSize: 12)),
+              child: Text(
+                usuarioPara.name.substring(0, 2),
+                style: TextStyle(fontSize: 12),
+              ),
             ),
             SizedBox(height: 3),
             Text(
-              'Test 1',
+              usuarioPara.name,
               style: TextStyle(
                 color: Colors.black87,
                 fontSize: 12,
@@ -121,12 +178,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   _handleSubmit(String text) {
     if (text.isEmpty) return;
 
-    print('Message sent: $text');
-    String lastUid = _messages.isNotEmpty ? _messages.first.uid : '123';
-    String newUid = lastUid == '123' ? '456' : '123';
     final newMessage = ChatMessage(
       text: text,
-      uid: newUid,
+      uid: authService.usuario.uid,
       animationController: AnimationController(
         vsync: this,
         duration: Duration(milliseconds: 200),
@@ -140,14 +194,20 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       _textController.clear();
       _focusNode.requestFocus();
     });
+
+    socketService.emit('mensaje-personal', {
+      'de': authService.usuario.uid,
+      'para': chatService.usuarioPara.uid,
+      'mensaje': text,
+    });
   }
 
   @override
   void dispose() {
-    // TODO: off socket
     for (ChatMessage message in _messages) {
       message.animationController.dispose();
     }
+    socketService.socket.off('mensaje-personal');
     super.dispose();
   }
 }
